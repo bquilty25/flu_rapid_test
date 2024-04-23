@@ -1,11 +1,11 @@
 
 # Load required packages and utility scripts
-source("packages.R")
-source("utils.R")
-source("plot_functions.R")
-source("tracing_delays.R")
-source("kucirka_fitting.R")
-source("parameters.R")
+source("scripts/packages.R")
+source("scripts/utils.R")
+# source("scripts/plot_functions.R")
+# source("scripts/tracing_delays.R")
+# source("scripts/kucirka_fitting.R")
+source("scripts/parameters.R")
 
 run_model <- function(
   n_sims          = 1000,
@@ -23,7 +23,7 @@ run_model <- function(
   map(.x = c("mutate", "select", "filter"), 
       .f = function(x){conflicted::conflict_prefer(name = x, "dplyr")})
   
-  #browser()
+  browser()
   
   set.seed(seed)
   
@@ -146,7 +146,7 @@ return(averted)
 }
 
 input <- 
-  tibble(pathogen = "SARS-CoV-2") %>%
+  tibble(params) %>%
   bind_cols(., list(
     `Daily testing` = 
       crossing(sampling_freq    = 1,
@@ -155,7 +155,7 @@ input <-
                n_tests          = default_testing, 
                assay            = "LFA",
                sens_LFA     = c("higher","lower"),
-               quar_dur         = NA), 
+               quar_dur         = NA),#),
     `Post-exposure quarantine only` = 
       crossing(sampling_freq    = NA,
                tests            = FALSE,
@@ -197,10 +197,9 @@ input_split <-
   rowwise %>%
   group_split()
 
-trajectories <- make_trajectories(n_cases = 1000)
+trajectories <- make_trajectories(n_sims = 1000,browsing = T)
 
 results_name <- "results_list"
-
 
 assign(x     = results_name,
        value = map(

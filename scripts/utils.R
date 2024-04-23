@@ -1,56 +1,3 @@
-my_message <- function(x, ...){
-  message(paste(Sys.time(), x, sep = "    "), ...)
-}
-
-# is this not common to many scripts?
-main_scenarios <-
-  list(`low` = 
-         crossing(released_test = c("Released after first test",
-                                    "Released after mandatory isolation")),
-       `moderate` = 
-         crossing(released_test = c("Released after first test",
-                                    "Released after mandatory isolation")),
-       `high` = 
-         crossing(released_test = "Released after second test"),
-       `maximum` = 
-         crossing(released_test = c("Released after first test",
-                                    "Released after mandatory isolation"))
-  ) %>%
-  bind_rows(.id = "stringency") %>%
-  mutate(stage_released = "Infectious",
-         stringency = fct_inorder(stringency)) 
-
-probs        <- c(0.025,0.25,0.5,0.75,0.975)
-
-mv2gamma <- function(mean, var){
-  list(shape = mean^2/var,
-       rate  = mean/var,
-       scale = var/mean) 
-}
-
-gamma2mv <- function(shape, rate=NULL, scale=NULL){
-  if (is.null(rate)){
-    rate <- 1/scale
-  }
-  
-  list(mean = shape/rate,
-       var  = shape/rate^2)
-}
-
-
-time_to_event <- function(n, mean, var){
-  if (var > 0){
-    parms <- mv2gamma(mean, var)
-    return(rgamma(n, shape = parms$shape, rate = parms$rate))
-  } else{
-    return(rep(mean, n))
-  }
-}
-
-time_to_event_lnorm <- function(n, meanlog, sdlog){
-  rlnorm(n, meanlog = meanlog, sdlog = sdlog)
-}
-
 gen_screening_draws <- function(x){
   n <- nrow(x)
   
@@ -89,27 +36,6 @@ calc_outcomes <- function(x){
  
   #browser()
   return(x_)
-}
-
-detector <- function(pcr, u = NULL, spec = 1){
-  
-  if (is.null(u)){
-    u <- runif(n = length(pcr))
-  }
-  
-  # true positive if the PCR exceeds a random uniform
-  # when uninfected, PCR will be 0
-  TP <- pcr > u
-  
-  # false positive if in the top (1-spec) proportion of random draws
-  FP <- (pcr == 0)*(runif(n = length(pcr)) > spec)
-  
-  TP | FP
-}
-
-
-make_delay_label <- function(x,s){
-  paste(na.omit(x), s)
 }
 
 
@@ -162,6 +88,182 @@ make_trajectories <- function(n_cases){
     unnest_wider(inf_period)
   
   return(list(traj=traj,models=models))
+}
+
+# Create viral load trajectories for a given number of sims
+make_trajectories <- function(
+    n_sims = 100,
+    asymp_parms = asymp_fraction,
+    variant_info, 
+    browsing = FALSE
+){
+  
+  if (browsing) browser()
+  
+  set.seed(seed)
+  #simulate CT trajectories
+  
+  inf <- rbbinom(n = n_sims,
+                 size=1,
+                 alpha = asymp_parms$shape1,
+                 beta  = asymp_parms$shape2) %>%
+    as_tidytable() %>%
+    rename.("asymptomatic"=x) %>%
+    mutate.(sim=row_number.(),
+            asymptomatic=FALSE)#as.logical(asymptomatic))
+  
+  traj <- inf %>% 
+    crossing.(start=0) %>% 
+    mutate.(
+      prolif=case_when.(heterogen_vl~rnormTrunc(n=n(),mean=mean_prolif,
+                                                sd=sd_prolif,min = 1,max=14),
+                        TRUE~median(rnormTrunc(n=n(),mean=mean_prolif,
+                                               sd=sd_prolif,min = 1,max=14))),
+      clear=case_when.(heterogen_vl~rnormTrunc(n=n(), mean=mean_clear, 
+                                               sd=sd_clear, min = 1,max=30),
+                       TRUE~median(rnormTrunc(n=n(), mean=mean_clear, 
+                                              sd=sd_clear, min = 1,max=30))),
+      end=prolif+clear,
+      onset_t=prolif+rnorm(n=n(),mean = 2,sd=1.5)
+    ) %>%
+    select.(-c(mean_prolif, sd_prolif, mean_clear, sd_clear,clear)) %>%
+    pivot_longer.(cols = -c(sim,variant,onset_t, asymptomatic, heterogen_vl,
+                            mean_peakvl,sd_peakvl),
+                  values_to = "x") %>%
+    mutate.(y=case_when.(name=="start" ~ 40,
+                         name=="end"   ~ 40,
+                         name=="prolif"~case_when.(heterogen_vl~rnormTrunc(n=n(),
+                                                                           mean=mean_peakvl,
+                                                                           sd=sd_peakvl,min=0,max=40),
+                                                   TRUE~median(rnormTrunc(n=n(),
+                                                                          mean=mean_peakvl,
+                                                                          sd=sd_peakvl,min=0,max=40))))) %>% 
+    select.(-c(mean_peakvl,sd_peakvl))
+  
+  
+  models <- traj %>%
+    nest.(data = -c(sim,variant,onset_t,asymptomatic,heterogen_vl)) %>%  
+    mutate.(
+      # Perform approxfun on each set of points
+      m  = map.(data, ~approxfun(x=.x$x,y=.x$y))) 
+  
+  #cannot pivot wider with "m" column - extract and rejoin
+  x_model <- models %>% 
+    select.(-data)
+  
+  models <- models %>% 
+    select.(-m) %>% 
+    unnest.(data,.drop=F) %>%  
+    select.(-c(y)) %>% 
+    pivot_wider.(names_from=name,values_from = x) %>% 
+    left_join.(x_model) %>%
+    select.(c(sim, variant, heterogen_vl, onset_t, prolif, start, end, m)) %>% 
+    arrange.(sim)
+  
+}
+
+inf_curve_func <- function(m,start=0,end=30,interval=1,trunc_t){
+  #browser()
+  x <- tidytable(t=seq(start,end,by=interval)) %>% 
+    mutate.(ct=m(t),
+            vl=convert_Ct_logGEML(ct))
+  
+  return(infectiousness=x)
+}
+
+calc_sensitivity <- function(model, x){
+  #browser()
+  if(!is.na(x)){
+    s <- model(x)
+  } else {
+    s <- NA_real_
+  }
+  
+  return(s)
+}
+
+#### Main Model ----
+run_model <- function(testing_scenarios, scenarios, contact_dat=contact_data, browsing=F){
+  
+  if(browsing){browser()}
+  
+  #### Generate infections of hh (household) contacts ####
+  indiv_params <- traj %>%  
+    select.(-m) %>%
+    crossing.(heterogen_contacts = unique(scenarios$heterogen_contacts),
+              period=unique(scenarios %>% 
+                              mutate.(period=fct_drop(period)) %>% 
+                              pull.(period))) %>%   
+    mutate.(hh_contacts=ifelse(heterogen_contacts,
+                               sample_filter(condition = period, 
+                                             df = contact_dat, 
+                                             col="e_home", 
+                                             n=n()),
+                               round(mean_filter(condition = period, 
+                                                 df = contact_data, 
+                                                 col="e_home"))),
+            .by=c(period)) 
+  
+  indiv_params_long <- indiv_params %>% 
+    left_join.(traj_)
+  
+  #simulate infections (and keep first instance)
+  hh_infections <- indiv_params_long %>% 
+    uncount.(hh_contacts,.id="id",.remove = F) %>% 
+    mutate.(hh_duration = case_when.(heterogen_contacts ~ sample(contacts_hh_duration,
+                                                                 size=n(),replace=T),
+                                     TRUE               ~ median(contacts_hh_duration)),
+            infected    = rbernoulli(n(),p=culture_p*hh_duration)) %>% 
+    filter.(infected==T) %>% 
+    slice.(min(t), .by=c(all_of(key_grouping_var),hh_contacts,id)) %>% 
+    count.(t,all_of(key_grouping_var),hh_contacts,name = "hh_infected") %>% 
+    arrange.(sim)
+  
+  #### Calculate nhh infections ####
+  
+  nhh_infections <- indiv_params_long %>% 
+    
+    # Sample daily contacts
+    mutate.(nhh_contacts = ifelse(heterogen_contacts,
+                                  sample_filter(condition = period,
+                                                df=contact_dat,
+                                                col="e_other",n=n()),
+                                  round(mean_filter(condition = period,
+                                                    df=contact_dat,
+                                                    col="e_other"))),
+            .by=c(period)) %>% 
+    
+    # Simulate infections 
+    uncount.(nhh_contacts,.remove = F) %>% 
+    mutate.(nhh_duration = case_when.(heterogen_contacts ~ sample(contacts_nhh_duration,
+                                                                  size=n(),replace=T),
+                                      TRUE               ~ median(contacts_nhh_duration)),
+            nhh_infected = rbernoulli(n=n(),p = culture_p*nhh_duration)) %>% 
+    summarise.(nhh_infected=sum(nhh_infected),.by=c(t,all_of(key_grouping_var),nhh_contacts,test)) %>% 
+    
+    # Testing: determine if and when testing + isolating by specified sampling frequency, adherence  
+    right_join.(testing_scenarios) %>% 
+    mutate.(
+      test_day = case_when.((t - begin_testing) %% sampling_freq == 0 ~ TRUE,
+                            nhh_contacts > event_size ~ TRUE,
+                            TRUE ~ FALSE)) %>% 
+    mutate.(
+      earliest_pos = min(t[test&test_day]),
+      test_iso = t>=earliest_pos & self_iso_test,
+      .by=c(all_of(key_grouping_var),prop_self_iso_test,self_iso_test,begin_testing,sampling_freq,event_size)) %>%
+    filter.(test_iso==F) %>% 
+    select.(everything(),-test_iso,-test,-earliest_pos,-test_day) 
+  
+  # Join nhh and hh contacts and summarise
+  processed_infections <- indiv_params_long %>% 
+    right_join.(testing_scenarios) %>% 
+    left_join.(hh_infections) %>% 
+    left_join.(nhh_infections) %>% 
+    replace_na.(list(hh_infected=0,nhh_infected=0,nhh_contacts=0)) %>% 
+    arrange.(period,lower_inf_thresh) %>% 
+    mutate.(
+      total_contacts = nhh_contacts+hh_contacts,
+      total_infections=nhh_infected+hh_infected)
 }
 
 
@@ -289,117 +391,6 @@ check_unique_values <- function(df, vars){
   vars[l > 1]
   
 }
-
-
-waning_piecewise_linear <- function(x, ymax, ymin, k, xmax){
-  
-  if (ymin == ymax){
-    Beta = c(0, ymin)
-  } else {
-    
-    Beta <- solve(a = matrix(data = c(xmax, 1,
-                                      k,    1),    ncol = 2, byrow = T),
-                  b = matrix(data = c(ymin, ymax), ncol = 1))
-  }
-  
-  (x >= 0)*pmin(ymax, pmax(0, Beta[2] + Beta[1]*x))
-  
-}
-
-waning_points <- function(x, X, Y, log = FALSE){
-  
-  if (length(X) != length(Y)){
-    stop("X and Y must be same length")
-  }
-  
-  if (length(Y) == 1){
-    return(rep(Y, length(x)))
-  }
-  
-  if (log){
-    Y <- log(Y)
-  }
-  
-  Beta <- solve(a = cbind(X, 1), b = matrix(Y,ncol=1))
-  
-  Mu <- Beta[2] + Beta[1]*x
-  if (log){
-    Mu <- exp(Mu)
-  }
-  (x >= 0)*pmax(0, Mu)
-  
-}
-
-
-
-summarise_simulation <- function(x, faceting, y_labels = NULL){
-  
-  if(is.null(y_labels)){
-    # if none specified, use all.
-    y_labels_names <- grep(x=names(x), pattern="^trans_pot_", value = T)
-  } else {
-    y_labels_names <- names(y_labels)
-  }
-  
-  all_grouping_vars <- all.vars(faceting)
-  
-  # if (!any(grepl(pattern = "type", x = all_grouping_vars))){
-  #   all_grouping_vars <- c(all_grouping_vars, "type")
-  # }
-  
-  x_summaries <-
-    as.list(y_labels_names) %>%
-    set_names(., .) %>%
-    lapply(X = ., 
-           FUN = function(y){
-             make_quantiles(x,
-                            y_var = y, 
-                            vars = all_grouping_vars)})
-  
-  if (any(grepl(pattern = "type", x = all_grouping_vars))){
-    
-    x_summaries_all <- as.list(y_labels_names) %>%
-      set_names(., .) %>%
-      lapply(X = ., 
-             FUN = function(y){
-               make_quantiles(
-                 mutate(x,
-                        type = "all"),
-                 y_var = y, 
-                 vars = all_grouping_vars)})
-    
-    x_summaries <- map2(.x = x_summaries,
-                        .y = x_summaries_all,
-                        .f = ~bind_rows(.x, .y))
-    
-  }
-  
-  bind_rows(x_summaries, .id = "yvar")
-  
-}
-
-calc_sensitivity <- function(model, x){
-  #browser()
-  if(!is.na(x)){
-  s <- model(x)
-  } else {
-    s <- NA_real_
-  }
-  
-  return(s)
-}
-
-
-
-read_results <- function(results_path){
-  #browser()
-  list(here::here("results", results_path, "results.rds"),
-       here::here("results", results_path, "input.rds")) %>%
-    map(read_rds) %>%
-    map(bind_rows) %>%
-    {inner_join(.[[1]], .[[2]])}
-}
-
 
 test_times <- function(multiple_tests,tests,tracing_t,sec_exposed_t,quar_dur,sampling_freq = 1, max_tests = 14, n_tests){
   #browser()
