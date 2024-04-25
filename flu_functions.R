@@ -120,7 +120,9 @@ simulate_empirical_traj <- function(kinetics_dat, num_sec_cases, flu_generation_
     nest() %>% 
     mutate(m = map(data,~approxfun(x=.x$x, y=.x$y))) %>% 
     select(j,m) %>% 
-    ungroup()
+    ungroup() %>% 
+    #chance of being symptomatic: 66.9% Carrat et al.
+    mutate(symptomatic = rbinom(n=n(), 1, prob = 0.669))
   
 }
 
@@ -132,17 +134,18 @@ interpolate_trajectories <- function(m, x) {
   y = m(x)
   
   data.frame(x=x, y = y) %>% 
-    drop_na(y)
+    mutate(y = replace_na(y,0))
 
 }
 
 # Function to simulate testing, isolation due to symptoms, and isolation due to positive test
 simulate_isolation <- function(df, scenario, symptom_isolation = FALSE, n_tests) {
   
-  browser()
+  #browser()
   
   scenario <-  unique(scenario)
   symptom_isolation <- unique(symptom_isolation)
+  symptom_onset <- unique(df$symptom_onset)
   n_tests <- unique(n_tests)
   
   # Integrate under the curve
@@ -161,18 +164,28 @@ simulate_isolation <- function(df, scenario, symptom_isolation = FALSE, n_tests)
     # Probability of testing positive
     df$test_prob <- sensitivity_function(df$y, rapid = TRUE)
     
+    if(n_tests==1){
+      test_days <- round(symptom_onset/t_interval)*t_interval
+    } else {
+      test_days <- seq(round(symptom_onset/t_interval)*t_interval, 
+                       round(symptom_onset/t_interval)*t_interval + n_tests - 1, 
+                       by = 1)
+    }
+    
+    
     #Repeat daily testing until positive
     test_df <- df %>%
+      arrange(j, x) %>%
       group_by(j) %>%
-      filter(x >= symptom_onset) %>%
-      group_by(j) %>%
-      slice(1:n_tests) %>%
+      rowwise() %>% 
+      filter(x %in% test_days) %>%
+      rowwise() %>% 
       mutate(result = rbinom(n(), 1, test_prob)) %>%
       mutate(isolation_start = ifelse(result == 1, x, NA)) %>% 
+      ungroup() %>% 
+      filter(result == 1) %>% 
       group_by(j) %>%
-      filter(result == 1) %>%
-      arrange(j, x) %>% 
-      slice(1) %>%
+      slice(which.min(x)) %>% 
       select(j, isolation_start) %>% 
       ungroup()
     
@@ -263,3 +276,17 @@ simulate_isolation <- function(df, scenario, symptom_isolation = FALSE, n_tests)
   
 }
 
+plotting_theme <- theme_minimal()+
+  theme(axis.ticks = element_line(),
+        axis.title = element_text(),
+        axis.text = element_text(),
+        strip.text = element_text(),
+        axis.line.x = element_line(),
+        axis.line.y = element_line(),
+        #panel.border = element_rect(fill=NA,),
+        #panel.grid = element_blank(),
+        legend.position = "bottom",
+        strip.placement = "outside",
+        axis.line = element_line(),
+        line = element_line(),
+        text = element_text())
