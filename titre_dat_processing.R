@@ -8,7 +8,7 @@ h1n1_titres <- h1n1_titres %>%
   summarise(mean_log_titre = median(log_titre),
             upper_log_titre = max(log_titre),
             lower_log_titre = min(log_titre)) %>%
-  mutate(se=(upper_log_titre-lower_log_titre)/2,
+  mutate(se=(upper_log_titre-lower_log_titre),
          sd=se/sqrt(n())) 
 
 
@@ -17,7 +17,12 @@ h1n1_titres %>%
   mutate(trajectory = rnorm(n(),mean = mean_log_titre,sd = sd)) %>%
   ggplot(aes(x=day,y=mean_log_titre,ymin = lower_log_titre,ymax = upper_log_titre))+
   geom_pointrange()+
-  geom_line(aes(y=trajectory,group=i),alpha=0.1)
+  geom_line(aes(y=trajectory,group=i),alpha=0.1)+
+  labs(x = "Days since exposure", y = "Log viral titre",
+       color = "Symptom Isolation") +
+  plotting_theme
+
+ggsave("sec_cases_trajectories.png", width = 210, height = 150, dpi = 600, units = "mm", bg= "white")
 
 h3n2_titres <- read_csv("h3n2_titres_over_time.csv",col_names = c("day","log_titre"))
 

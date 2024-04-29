@@ -1,0 +1,17 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 Parameter,Value,Source\
+Symptom Onset Distribution,"Weibull (shape=2.1, scale=3.8)",Literature\
+Generation Time Distribution,"Weibull (shape=2.4, scale=3.2)",Literature\
+Onset to Test Delay,"Normal (mean=1 day, sd=0.5 days)",Assumed\
+Test to Result Delay (PCR),"Normal (mean=2 days, sd=0.5 days)",Assumed\
+Result to Contact Tracing Delay,"Normal (mean=2 days, sd=0.5 days)",Assumed\
+Rapid Test Sensitivity,"50% at 2 log viral load",Assumed\
+PCR Sensitivity,"50% at 1 log viral load",Assumed\
+Symptomatic Percentage,66.9%,"Carrat et al."\
+Viral Load Kinetics,"Empirical from H1N1 dataset",This study}
